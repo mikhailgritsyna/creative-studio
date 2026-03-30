@@ -74,8 +74,10 @@ async function callClaude({ prompt, images }) {
   if (!res.ok) throw new Error(`Ошибка API: ${res.status}`);
   const data = await res.json();
   const raw = data.content.map((b) => b.text || "").join("");
-  const clean = raw.replace(/```json|```/g, "").trim();
-  return JSON.parse(clean);
+const clean = raw.replace(/```json|```/g, "").trim();
+const match = clean.match(/\{[\s\S]*\}/);
+if (!match) throw new Error("Не удалось получить результат. Попробуйте ещё раз.");
+return JSON.parse(match[0]);
 }
 
 const Icons = {
