@@ -345,7 +345,13 @@ export default function App() {
   const handleGenerateImage = async () => {
     if (!result?.imagePrompt) return;
     setImageLoading(true); setImageError(null);
-    try { setGeneratedImage(await generateImage(result.imagePrompt)); }
+    try {
+  const headline = result.designerBrief.match(/Заголовок: (.+)/)?.[1] || "";
+  const sub = result.designerBrief.match(/Подзаголовок: (.+)/)?.[1] || "";
+  const cta = result.designerBrief.match(/CTA: (.+)/)?.[1] || "";
+  const fullPrompt = result.imagePrompt + ` Text on image: headline "${headline}", subheadline "${sub}", CTA button "${cta}". Text must be clearly visible and legible.`;
+  setGeneratedImage(await generateImage(fullPrompt));
+}
     catch (e) { setImageError(e.message); }
     finally { setImageLoading(false); }
   };
