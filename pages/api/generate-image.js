@@ -12,10 +12,9 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: "gpt-image-1",
-        prompt: prompt,
         n: 1,
-        size: "1024x1792",
-        quality: "standard",
+        size: "1024x1536",
+        quality: "high",
       }),
     });
 
