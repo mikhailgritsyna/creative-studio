@@ -12,6 +12,7 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: "gpt-image-1",
+        prompt: prompt,
         n: 1,
         size: "1024x1536",
         quality: "high",
@@ -24,7 +25,9 @@ export default async function handler(req, res) {
       return res.status(response.status).json({ error: data.error?.message || "Ошибка генерации" });
     }
 
-    res.status(200).json({ url: data.data[0].url });
+    // gpt-image-1 returns base64, not URL
+    const base64 = data.data[0].b64_json;
+    res.status(200).json({ url: `data:image/png;base64,${base64}` });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
