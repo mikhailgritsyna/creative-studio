@@ -180,16 +180,28 @@ function ImageUpload({ images, setImages }) {
   const inputRef = useRef();
   const [dragging, setDragging] = useState(false);
   const processFiles = (files) => {
-    Array.from(files).forEach((file) => {
-      if (!file.type.startsWith("image/")) return;
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const base64 = e.target.result.split(",")[1];
-        setImages((prev) => [...prev, { id: uid(), url: e.target.result, base64, mimeType: file.type, name: file.name }]);
+  Array.from(files).forEach((file) => {
+    if (!file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const maxSize = 800;
+        let w = img.width, h = img.height;
+        if (w > h && w > maxSize) { h = (h * maxSize) / w; w = maxSize; }
+        else if (h > maxSize) { w = (w * maxSize) / h; h = maxSize; }
+        canvas.width = w; canvas.height = h;
+        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+        const compressed = canvas.toDataURL("image/jpeg", 0.7);
+        const base64 = compressed.split(",")[1];
+        setImages((prev) => [...prev, { id: uid(), url: compressed, base64, mimeType: "image/jpeg", name: file.name }]);
       };
-      reader.readAsDataURL(file);
-    });
-  };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+};
   const onDrop = useCallback((e) => { e.preventDefault(); setDragging(false); processFiles(e.dataTransfer.files); }, []);
   return (
     <div>
