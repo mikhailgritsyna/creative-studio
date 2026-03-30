@@ -55,10 +55,22 @@ const fillPrompt = (template, vars) =>
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
-async function callClaude({ prompt, images }) {
+// Upload single image to Vercel Blob, returns public URL
+async function uploadToBlob(base64, filename, mimeType) {
+  const res = await fetch("/api/upload", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ base64, filename, mimeType }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Ошибка загрузки");
+  return data.url;
+}
+
+async function callClaude({ prompt, imageUrls }) {
   const content = [];
-  images.forEach(({ base64, mimeType }) => {
-    content.push({ type: "image", source: { type: "base64", media_type: mimeType, data: base64 } });
+  imageUrls.forEach((url) => {
+    content.push({ type: "image", source: { type: "url", url } });
   });
   content.push({ type: "text", text: prompt });
 
@@ -88,7 +100,7 @@ async function generateImage(prompt) {
     body: JSON.stringify({ prompt }),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "Ошибка генерации изображения");
+  if (!res.ok) throw new Error(data.error || "Ошибка генерации");
   return data.url;
 }
 
@@ -128,6 +140,87 @@ const Textarea = ({ value, onChange, placeholder, rows = 3 }) => (
     onBlur={(e) => (e.target.style.borderColor = "#2d2a25")} />
 );
 
+// Upload images one by one to Vercel Blob
+function ImageUpload({ images, setImages }) {
+  const inputRef = useRef();
+  const [dragging, setDragging] = useState(false);
+  const [uploading, setUploading] = useState(false);
+
+  const processFiles = useCallback(async (files) => {
+    setUploading(true);
+    for (const file of Array.from(files)) {
+      if (!file.type.startsWith("image/")) continue;
+      try {
+        const reader = new FileReader();
+        const base64 = await new Promise((res) => {
+          reader.onload = (e) => res(e.target.result.split(",")[1]);
+          reader.readAsDataURL(file);
+        });
+        // Show preview immediately
+        const previewUrl = URL.createObjectURL(file);
+        const tempId = uid();
+        setImages((prev) => [...prev, { id: tempId, url: previewUrl, blobUrl: null, uploading: true, name: file.name }]);
+        // Upload to blob
+        const blobUrl = await uploadToBlob(base64, `${uid()}-${file.name}`, file.type);
+        setImages((prev) => prev.map((img) =>
+          img.id === tempId ? { ...img, blobUrl, uploading: false } : img
+        ));
+      } catch (e) {
+        console.error("Upload error:", e);
+      }
+    }
+    setUploading(false);
+  }, [setImages]);
+
+  const onDrop = useCallback((e) => {
+    e.preventDefault(); setDragging(false);
+    processFiles(e.dataTransfer.files);
+  }, [processFiles]);
+
+  return (
+    <div>
+      <div onClick={() => inputRef.current.click()} onDrop={onDrop}
+        onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
+        className="cursor-pointer flex flex-col items-center justify-center gap-3 py-10 transition-all"
+        style={{ border: `2px dashed ${dragging ? "#8B7355" : "#2d2a25"}`, borderRadius: "10px", background: dragging ? "#1f1d1980" : "#12110e" }}>
+        <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: "#1a1814", border: "1px solid #2d2a25" }}>
+          {uploading ? (
+            <div className="w-4 h-4 rounded-full animate-spin" style={{ border: "2px solid transparent", borderTopColor: "#8B7355" }} />
+          ) : <Icons.Upload />}
+        </div>
+        <div className="text-center">
+          <p className="text-sm" style={{ color: "#e8e0d0" }}>
+            {uploading ? "Загружаю..." : <>Перетащите или <span style={{ color: "#8B7355" }}>выберите файлы</span></>}
+          </p>
+          <p className="text-xs mt-1" style={{ color: "#5a5248" }}>PNG, JPG, WEBP — любой размер</p>
+        </div>
+        <input ref={inputRef} type="file" multiple accept="image/*" className="hidden" onChange={(e) => processFiles(e.target.files)} />
+      </div>
+
+      {images.length > 0 && (
+        <div className="flex flex-wrap gap-3 mt-4">
+          {images.map((img) => (
+            <div key={img.id} className="relative group w-20 h-20">
+              <img src={img.url} alt={img.name} className="w-full h-full object-cover rounded-lg" style={{ border: "1px solid #2d2a25", opacity: img.uploading ? 0.5 : 1 }} />
+              {img.uploading && (
+                <div className="absolute inset-0 flex items-center justify-center rounded-lg" style={{ background: "#00000060" }}>
+                  <div className="w-5 h-5 rounded-full animate-spin" style={{ border: "2px solid transparent", borderTopColor: "#8B7355" }} />
+                </div>
+              )}
+              {!img.uploading && (
+                <div className="absolute top-1 right-1 w-3 h-3 rounded-full" style={{ background: "#6fcf97" }} />
+              )}
+              <button onClick={() => setImages((p) => p.filter((i) => i.id !== img.id))}
+                className="absolute -top-2 -left-2 w-5 h-5 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                style={{ background: "#e55a4e", color: "#fff" }}><Icons.X /></button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ResultCard({ title, content, accent }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = () => { navigator.clipboard.writeText(content); setCopied(true); setTimeout(() => setCopied(false), 2000); };
@@ -156,80 +249,17 @@ function ImageCard({ imageUrl, onRegenerate, loading }) {
       <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: "1px solid #2d2a25" }}>
         <span className="text-xs font-bold tracking-widest uppercase" style={{ color: "#FF6B6B", letterSpacing: "0.14em" }}>Сгенерированный креатив</span>
         <div className="flex gap-2">
-          <button onClick={onRegenerate} disabled={loading}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded"
-            style={{ color: "#5a5248", background: "#0f0e0c" }}>
+          <button onClick={onRegenerate} disabled={loading} className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded" style={{ color: "#5a5248", background: "#0f0e0c" }}>
             <Icons.Zap />{loading ? "Генерирую..." : "Ещё раз"}
           </button>
-          <a href={imageUrl} target="_blank" rel="noreferrer"
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded"
-            style={{ color: "#5a5248", background: "#0f0e0c" }}>
+          <a href={imageUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded" style={{ color: "#5a5248", background: "#0f0e0c" }}>
             <Icons.Download />Скачать
           </a>
         </div>
       </div>
       <div className="p-5 flex justify-center">
-        <img src={imageUrl} alt="Creative" className="rounded-lg"
-          style={{ maxHeight: "600px", maxWidth: "100%", objectFit: "contain", border: "1px solid #2d2a25" }} />
+        <img src={imageUrl} alt="Creative" className="rounded-lg" style={{ maxHeight: "600px", maxWidth: "100%", objectFit: "contain", border: "1px solid #2d2a25" }} />
       </div>
-    </div>
-  );
-}
-
-function ImageUpload({ images, setImages }) {
-  const inputRef = useRef();
-  const [dragging, setDragging] = useState(false);
-  const processFiles = (files) => {
-  Array.from(files).forEach((file) => {
-    if (!file.type.startsWith("image/")) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        const maxSize = 800;
-        let w = img.width, h = img.height;
-        if (w > h && w > maxSize) { h = (h * maxSize) / w; w = maxSize; }
-        else if (h > maxSize) { w = (w * maxSize) / h; h = maxSize; }
-        canvas.width = w; canvas.height = h;
-        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-        const compressed = canvas.toDataURL("image/jpeg", 0.7);
-        const base64 = compressed.split(",")[1];
-        setImages((prev) => [...prev, { id: uid(), url: compressed, base64, mimeType: "image/jpeg", name: file.name }]);
-      };
-      img.src = e.target.result;
-    };
-    reader.readAsDataURL(file);
-  });
-};
-  const onDrop = useCallback((e) => { e.preventDefault(); setDragging(false); processFiles(e.dataTransfer.files); }, []);
-  return (
-    <div>
-      <div onClick={() => inputRef.current.click()} onDrop={onDrop}
-        onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
-        className="cursor-pointer flex flex-col items-center justify-center gap-3 py-10 transition-all"
-        style={{ border: `2px dashed ${dragging ? "#8B7355" : "#2d2a25"}`, borderRadius: "10px", background: dragging ? "#1f1d1980" : "#12110e" }}>
-        <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: "#1a1814", border: "1px solid #2d2a25" }}>
-          <Icons.Upload />
-        </div>
-        <div className="text-center">
-          <p className="text-sm" style={{ color: "#e8e0d0" }}>Перетащите или <span style={{ color: "#8B7355" }}>выберите файлы</span></p>
-          <p className="text-xs mt-1" style={{ color: "#5a5248" }}>PNG, JPG, WEBP</p>
-        </div>
-        <input ref={inputRef} type="file" multiple accept="image/*" className="hidden" onChange={(e) => processFiles(e.target.files)} />
-      </div>
-      {images.length > 0 && (
-        <div className="flex flex-wrap gap-3 mt-4">
-          {images.map((img) => (
-            <div key={img.id} className="relative group w-20 h-20">
-              <img src={img.url} alt={img.name} className="w-full h-full object-cover rounded-lg" style={{ border: "1px solid #2d2a25" }} />
-              <button onClick={() => setImages((p) => p.filter((i) => i.id !== img.id))}
-                className="absolute -top-2 -right-2 w-5 h-5 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                style={{ background: "#e55a4e", color: "#fff" }}><Icons.X /></button>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -295,11 +325,18 @@ export default function App() {
   const setField = (key) => (val) => setForm((f) => ({ ...f, [key]: val }));
 
   const generate = async (revisionRequest = "") => {
+    const stillUploading = images.some((img) => img.uploading);
+    if (stillUploading) { alert("Подождите — изображения ещё загружаются..."); return; }
+
     setLoading(true); setError(null); setGeneratedImage(null);
     try {
-      const refText = images.length > 0 ? `Прикреплено ${images.length} референс(ов). Проанализируй их визуально.` : "Референсы не загружены.";
+      const imageUrls = images.filter((img) => img.blobUrl).map((img) => img.blobUrl);
+      const refText = imageUrls.length > 0
+        ? `Прикреплено ${imageUrls.length} референс(ов). Проанализируй их визуально.`
+        : "Референсы не предоставлены.";
+
       const prompt = fillPrompt(BASE_PROMPT, { ...form, references: refText, revisionRequest: revisionRequest || "—" });
-      const data = await callClaude({ prompt, images });
+      const data = await callClaude({ prompt, imageUrls });
       setResult(data); setRevisionMode(false); setRevisionText("");
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
@@ -366,8 +403,13 @@ export default function App() {
               <h2 style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: "38px", letterSpacing: "0.06em", lineHeight: 1 }}>СДЕЛАТЬ КРЕАТИВ</h2>
               <p className="mt-2 text-sm" style={{ color: "#5a5248" }}>Заполните бриф — Claude создаст ТЗ, концепцию и изображение</p>
             </div>
+
             <div className="space-y-6">
-              <div><Label>Референсы</Label><ImageUpload images={images} setImages={setImages} /></div>
+              <div>
+                <Label>Референсы</Label>
+                <ImageUpload images={images} setImages={setImages} />
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2 sm:col-span-1"><Label>Ниша</Label><Input value={form.niche} onChange={setField("niche")} placeholder="Фитнес, курсы, косметика..." /></div>
                 <div className="col-span-2 sm:col-span-1"><Label>Язык креатива</Label><Input value={form.language} onChange={setField("language")} placeholder="Русский" /></div>
@@ -380,7 +422,9 @@ export default function App() {
                 <div className="col-span-2 sm:col-span-1"><Label optional>Акценты</Label><Input value={form.focusPoints} onChange={setField("focusPoints")} placeholder="На что делать упор..." /></div>
               </div>
               <div><Label optional>Пожелания</Label><Textarea value={form.wishes} onChange={setField("wishes")} placeholder="Особые требования..." rows={2} /></div>
+
               {error && <div className="px-4 py-3 rounded text-sm" style={{ background: "#e55a4e15", border: "1px solid #e55a4e40", color: "#e55a4e" }}>{error}</div>}
+
               <button onClick={() => generate()}
                 className="w-full py-4 font-bold tracking-widest uppercase flex items-center justify-center gap-3 rounded transition-all"
                 style={{ background: "#8B7355", color: "#0f0e0c", letterSpacing: "0.14em", fontFamily: "'Bebas Neue', sans-serif", fontSize: "16px" }}
@@ -392,7 +436,7 @@ export default function App() {
           </div>
         )}
 
-        {loading && <Spinner text="Генерирую креатив" sub="Claude анализирует данные..." />}
+        {loading && <Spinner text="Генерирую креатив" sub="Claude анализирует данные и референсы..." />}
 
         {result && !loading && (
           <div>
@@ -401,7 +445,7 @@ export default function App() {
                 <h2 style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: "32px", letterSpacing: "0.06em", lineHeight: 1 }}>РЕЗУЛЬТАТ</h2>
                 <p className="text-xs mt-1" style={{ color: "#5a5248" }}>{form.niche && `Ниша: ${form.niche}`}</p>
               </div>
-              <button onClick={() => { setResult(null); setRevisionMode(false); setGeneratedImage(null); }}
+              <button onClick={() => { setResult(null); setRevisionMode(false); setGeneratedImage(null); setImages([]); }}
                 className="text-xs px-4 py-2 rounded" style={{ border: "1px solid #2d2a25", color: "#8B7355", background: "#1a1814" }}>
                 ← Новый
               </button>
@@ -420,10 +464,8 @@ export default function App() {
                   <p className="text-xs mb-4" style={{ color: "#5a5248" }}>DALL-E 3 создаст визуал на основе концепции</p>
                   {imageError && <p className="text-xs mb-3" style={{ color: "#e55a4e" }}>{imageError}</p>}
                   <button onClick={handleGenerateImage}
-                    className="px-6 py-3 rounded text-sm font-semibold flex items-center gap-2 mx-auto transition-all"
-                    style={{ background: "#FF6B6B20", border: "1px solid #FF6B6B50", color: "#FF6B6B" }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = "#FF6B6B30")}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "#FF6B6B20")}>
+                    className="px-6 py-3 rounded text-sm font-semibold flex items-center gap-2 mx-auto"
+                    style={{ background: "#FF6B6B20", border: "1px solid #FF6B6B50", color: "#FF6B6B" }}>
                     <Icons.Image />Сгенерировать изображение
                   </button>
                 </div>
